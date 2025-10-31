@@ -118,6 +118,7 @@ local pathVisualizationFolder: Folder? = nil
 local pathVisualizationItems: {Instance} = {}
 local lastVisualizationRootPosition: Vector3? = nil
 local lastVisualizationWaypointIndex = 0
+local visualizationAnchorPosition: Vector3? = nil
 
 local function ensurePathVisualizationFolder(): Folder?
     if not Config.PathVisualization.Enabled then
@@ -156,6 +157,7 @@ local function clearPathVisualization()
 
     lastVisualizationRootPosition = nil
     lastVisualizationWaypointIndex = 0
+    visualizationAnchorPosition = nil
 end
 
 local function addPathSegment(folder: Folder, fromPos: Vector3, toPos: Vector3)
@@ -212,7 +214,7 @@ local function rebuildPathVisualization()
         return
     end
 
-    local previousPosition = root.Position
+    local previousPosition = visualizationAnchorPosition or root.Position
     for index = math.max(currentWaypointIndex, 1), #waypoints do
         local waypoint = waypoints[index]
         addPathSegment(folder, previousPosition, waypoint.Position)
@@ -326,15 +328,17 @@ local function playAnimationFor(activity: string)
 end
 
 local function setActivity(activity: string)
-    if currentActivity == activity then
-        if currentAnimationTrack and Config.AnimationConfig.Enabled and not currentAnimationTrack.IsPlaying then
-            currentAnimationTrack:Play()
-        end
+    if currentActivity ~= activity then
+        currentActivity = activity
+        playAnimationFor(activity)
         return
     end
 
-    currentActivity = activity
-    playAnimationFor(activity)
+    if Config.AnimationConfig.Enabled then
+        if not currentAnimationTrack or not currentAnimationTrack.IsPlaying then
+            playAnimationFor(activity)
+        end
+    end
 end
 
 setupAnimations()
@@ -434,6 +438,7 @@ end
 
 local function computePath(targetPosition: Vector3)
     currentTargetPosition = targetPosition
+    visualizationAnchorPosition = root.Position
 
     local success, errorMessage = pcall(function()
         path:ComputeAsync(root.Position, targetPosition)
@@ -505,6 +510,7 @@ local function followPathWithoutHumanoid(stepDistance: number)
         local distance = horizontal.Magnitude
 
         if distance <= Config.WaypointReachThreshold then
+            visualizationAnchorPosition = waypoint.Position
             currentWaypointIndex += 1
             refreshPathVisualization(true)
             if currentWaypointIndex > #waypoints then
@@ -537,6 +543,7 @@ local function updateWaypointProgressForHumanoid()
 
     local waypoint = waypoints[currentWaypointIndex]
     if (root.Position - waypoint.Position).Magnitude <= Config.WaypointReachThreshold then
+        visualizationAnchorPosition = waypoint.Position
         currentWaypointIndex += 1
         refreshPathVisualization(true)
         if currentWaypointIndex > #waypoints then
