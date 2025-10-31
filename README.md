@@ -15,5 +15,6 @@ This repository provides a Roblox enemy AI Script (`EnemyAI.lua`) that makes an 
 - Open the `Config` table near the top of `EnemyAI.lua` to tweak behaviour:
   - `MovementSpeed`, `WaypointReachThreshold`, and `PathRecalculateDistance` control chase movement.
   - `PathAgentParameters` (radius, height, can jump) should match the size of your enemy for best pathfinding results.
+  - `PathVisualization` draws the current path using neon segments and waypoint orbs so you can see where the AI plans to move. Adjust colours, thickness, waypoint size, or set `Enabled = false` if you want to hide it. You can also assign a specific parent (e.g. a dedicated folder in `Workspace`).
   - `LookThresholdDegrees` adjusts how wide the vision cone is for freezing behaviour.
 - To use your own animations, set `AnimationConfig.Enabled = true` and fill in the `AnimationIds` table with your animation asset IDs (e.g. `rbxassetid://123456789`). Provide IDs for `Idle`, `Moving`, and optionally `Watched` (played when the player is looking at the enemy). The script will automatically create/load animations on a `Humanoid` or `AnimationController`.

@@ -19,6 +19,18 @@ local Config = {
         AgentHeight = 6,
         AgentCanJump = true,
     },
+    PathVisualization = {
+        Enabled = true,
+        Parent = nil,
+        SegmentColor = Color3.fromRGB(255, 0, 0),
+        SegmentMaterial = Enum.Material.Neon,
+        SegmentTransparency = 0.25,
+        SegmentThickness = 0.35,
+        WaypointColor = Color3.fromRGB(255, 170, 0),
+        WaypointTransparency = 0.1,
+        WaypointSize = 0.85,
+        RefreshDistance = 1,
+    },
     AnimationConfig = {
         Enabled = false,
         AnimationIds = {
@@ -101,6 +113,138 @@ local currentActivity = "Idle"
 local animator: Animator? = nil
 local animationTracks: {[string]: AnimationTrack} = {}
 local currentAnimationTrack: AnimationTrack? = nil
+
+local pathVisualizationFolder: Folder? = nil
+local pathVisualizationItems: {Instance} = {}
+local lastVisualizationRootPosition: Vector3? = nil
+local lastVisualizationWaypointIndex = 0
+
+local function ensurePathVisualizationFolder(): Folder?
+    if not Config.PathVisualization.Enabled then
+        return nil
+    end
+
+    if pathVisualizationFolder and pathVisualizationFolder.Parent then
+        return pathVisualizationFolder
+    end
+
+    local parent = Config.PathVisualization.Parent
+    if typeof(parent) ~= "Instance" or not parent:IsDescendantOf(game) then
+        parent = workspace
+    end
+
+    local folder = Instance.new("Folder")
+    folder.Name = string.format("%s_PathVisualization", npc.Name)
+    folder.Parent = parent
+    pathVisualizationFolder = folder
+
+    return folder
+end
+
+local function clearPathVisualization()
+    for index = #pathVisualizationItems, 1, -1 do
+        local item = pathVisualizationItems[index]
+        if item and item.Parent then
+            item:Destroy()
+        end
+        pathVisualizationItems[index] = nil
+    end
+
+    if pathVisualizationFolder then
+        pathVisualizationFolder:ClearAllChildren()
+    end
+
+    lastVisualizationRootPosition = nil
+    lastVisualizationWaypointIndex = 0
+end
+
+local function addPathSegment(folder: Folder, fromPos: Vector3, toPos: Vector3)
+    local length = (toPos - fromPos).Magnitude
+    if length <= 0.01 then
+        return
+    end
+
+    local part = Instance.new("Part")
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.Material = Config.PathVisualization.SegmentMaterial
+    part.Color = Config.PathVisualization.SegmentColor
+    part.Transparency = Config.PathVisualization.SegmentTransparency
+    part.Size = Vector3.new(Config.PathVisualization.SegmentThickness, Config.PathVisualization.SegmentThickness, length)
+    part.CFrame = CFrame.lookAt((fromPos + toPos) * 0.5, toPos)
+    part.Name = "PathSegment"
+    part.Parent = folder
+    table.insert(pathVisualizationItems, part)
+end
+
+local function addWaypointMarker(folder: Folder, position: Vector3)
+    local marker = Instance.new("Part")
+    marker.Anchored = true
+    marker.Shape = Enum.PartType.Ball
+    marker.CanCollide = false
+    marker.CanQuery = false
+    marker.CanTouch = false
+    marker.Material = Config.PathVisualization.SegmentMaterial
+    marker.Color = Config.PathVisualization.WaypointColor
+    marker.Transparency = Config.PathVisualization.WaypointTransparency
+    marker.Size = Vector3.new(Config.PathVisualization.WaypointSize, Config.PathVisualization.WaypointSize, Config.PathVisualization.WaypointSize)
+    marker.CFrame = CFrame.new(position)
+    marker.Name = "WaypointMarker"
+    marker.Parent = folder
+    table.insert(pathVisualizationItems, marker)
+end
+
+local function rebuildPathVisualization()
+    if not Config.PathVisualization.Enabled then
+        return
+    end
+
+    clearPathVisualization()
+
+    local folder = ensurePathVisualizationFolder()
+    if not folder then
+        return
+    end
+
+    if currentWaypointIndex == 0 or #waypoints == 0 then
+        return
+    end
+
+    local previousPosition = root.Position
+    for index = math.max(currentWaypointIndex, 1), #waypoints do
+        local waypoint = waypoints[index]
+        addPathSegment(folder, previousPosition, waypoint.Position)
+        addWaypointMarker(folder, waypoint.Position)
+        previousPosition = waypoint.Position
+    end
+end
+
+local function refreshPathVisualization(force: boolean)
+    if not Config.PathVisualization.Enabled then
+        return
+    end
+
+    local rootPosition = root.Position
+    if not lastVisualizationRootPosition then
+        force = true
+    end
+
+    if not force then
+        if currentWaypointIndex ~= lastVisualizationWaypointIndex then
+            force = true
+        elseif (rootPosition - lastVisualizationRootPosition :: Vector3).Magnitude >= Config.PathVisualization.RefreshDistance then
+            force = true
+        end
+    end
+
+    if force then
+        rebuildPathVisualization()
+        lastVisualizationRootPosition = rootPosition
+        lastVisualizationWaypointIndex = currentWaypointIndex
+    end
+end
 
 local function ensureAnimator(): Animator?
     if animator then
@@ -218,6 +362,7 @@ local function setMovementPaused(paused: boolean, pauseActivity: string?)
         currentTargetPosition = nil
         clearMovement()
         setActivity(pauseActivity or "Idle")
+        clearPathVisualization()
     else
         if not isPaused then
             return
@@ -299,6 +444,7 @@ local function computePath(targetPosition: Vector3)
         waypoints = {}
         currentWaypointIndex = 0
         currentTargetPosition = nil
+        clearPathVisualization()
         if not isPaused then
             setActivity("Idle")
         end
@@ -333,6 +479,7 @@ local function computePath(targetPosition: Vector3)
     end
 
     currentWaypointIndex = 1
+    refreshPathVisualization(true)
 end
 
 local function followPathWithHumanoid()
@@ -359,10 +506,12 @@ local function followPathWithoutHumanoid(stepDistance: number)
 
         if distance <= Config.WaypointReachThreshold then
             currentWaypointIndex += 1
+            refreshPathVisualization(true)
             if currentWaypointIndex > #waypoints then
                 currentWaypointIndex = 0
                 currentTargetPosition = nil
                 setActivity("Idle")
+                clearPathVisualization()
                 return
             end
             continue
@@ -378,6 +527,7 @@ local function followPathWithoutHumanoid(stepDistance: number)
 
         remaining -= step
     end
+
 end
 
 local function updateWaypointProgressForHumanoid()
@@ -388,10 +538,12 @@ local function updateWaypointProgressForHumanoid()
     local waypoint = waypoints[currentWaypointIndex]
     if (root.Position - waypoint.Position).Magnitude <= Config.WaypointReachThreshold then
         currentWaypointIndex += 1
+        refreshPathVisualization(true)
         if currentWaypointIndex > #waypoints then
             currentWaypointIndex = 0
             currentTargetPosition = nil
             setActivity("Idle")
+            clearPathVisualization()
         end
     end
 end
@@ -430,6 +582,8 @@ local function moveTowardsPlayer(player: Player, dt: number)
         local stepDistance = Config.MovementSpeed * dt
         followPathWithoutHumanoid(stepDistance)
     end
+
+    refreshPathVisualization(false)
 end
 
 path.Blocked:Connect(function(blockedWaypointIndex)
