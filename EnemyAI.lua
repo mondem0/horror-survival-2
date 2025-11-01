@@ -32,6 +32,11 @@ local CONFIG = {
     },
     RecomputeDelay = 0.75,
     WaypointTolerance = 1.5,
+    Animations = {
+        TransitionTime = 0.2,
+        Idle = nil, -- Accepts an asset id (string/number) or table with Id/Looped/Priority fields
+        Move = nil,
+    },
     Visualization = {
         Enabled = true,
         SegmentThickness = 0.2,
@@ -56,6 +61,141 @@ local function syncJumpCapability()
 end
 
 syncJumpCapability()
+
+local animator = humanoid:FindFirstChildOfClass("Animator")
+if not animator then
+    animator = Instance.new("Animator")
+    animator.Parent = humanoid
+end
+
+local function normalizeAssetId(raw)
+    if raw == nil then
+        return nil
+    end
+
+    local valueType = typeof(raw)
+    if valueType == "number" then
+        return "rbxassetid://" .. raw
+    elseif valueType == "string" then
+        if raw == "" then
+            return nil
+        end
+        if raw:match("^rbxassetid://") then
+            return raw
+        end
+        if tonumber(raw) then
+            return "rbxassetid://" .. raw
+        end
+        return raw
+    end
+
+    return nil
+end
+
+local function loadAnimationFromConfig(entry)
+    if not entry then
+        return nil
+    end
+
+    local entryType = typeof(entry)
+    local animationInstance
+    local priority
+    local looped
+
+    if entryType == "Instance" and entry:IsA("Animation") then
+        animationInstance = entry
+    elseif entryType == "table" then
+        priority = entry.Priority
+        looped = entry.Looped
+
+        if entry.Animation and typeof(entry.Animation) == "Instance" and entry.Animation:IsA("Animation") then
+            animationInstance = entry.Animation
+        else
+            local id = normalizeAssetId(entry.Id or entry.AnimationId or entry.AssetId)
+            if not id then
+                return nil
+            end
+            animationInstance = Instance.new("Animation")
+            animationInstance.AnimationId = id
+            animationInstance.Name = entry.Name or "EnemyConfiguredAnimation"
+            animationInstance.Parent = script
+        end
+    else
+        local id = normalizeAssetId(entry)
+        if not id then
+            return nil
+        end
+        animationInstance = Instance.new("Animation")
+        animationInstance.AnimationId = id
+        animationInstance.Name = "EnemyConfiguredAnimation"
+        animationInstance.Parent = script
+    end
+
+    if priority then
+        pcall(function()
+            animationInstance.Priority = priority
+        end)
+    end
+
+    local success, trackOrError = pcall(function()
+        return animator:LoadAnimation(animationInstance)
+    end)
+
+    if not success then
+        warn("Enemy failed to load animation", trackOrError)
+        return nil
+    end
+
+    local track = trackOrError
+    if looped ~= nil then
+        track.Looped = looped
+    else
+        track.Looped = true
+    end
+
+    if priority then
+        pcall(function()
+            track.Priority = priority
+        end)
+    end
+
+    return track
+end
+
+local animationTracks = {
+    Idle = loadAnimationFromConfig(CONFIG.Animations and CONFIG.Animations.Idle),
+    Move = loadAnimationFromConfig(CONFIG.Animations and CONFIG.Animations.Move),
+}
+
+local currentAnimationName = nil
+
+local function animationTransitionTime()
+    if CONFIG.Animations and CONFIG.Animations.TransitionTime then
+        return CONFIG.Animations.TransitionTime
+    end
+    return 0.2
+end
+
+local function playAnimation(name)
+    if currentAnimationName == name then
+        return
+    end
+
+    local fadeTime = animationTransitionTime()
+    for trackName, track in pairs(animationTracks) do
+        if track and track.IsPlaying and trackName ~= name then
+            track:Stop(fadeTime)
+        end
+    end
+
+    currentAnimationName = name
+    local track = animationTracks[name]
+    if track then
+        track:Play(fadeTime)
+    end
+end
+
+playAnimation("Idle")
 
 local visualizationFolder = Instance.new("Folder")
 visualizationFolder.Name = "EnemyPathVisualization"
@@ -142,6 +282,7 @@ local function clearActivePath()
     activeWaypoints = nil
     currentWaypointIndex = 0
     clearVisualization()
+    playAnimation("Idle")
 end
 
 local function moveToWaypoint(index: number)
@@ -166,6 +307,7 @@ local function moveToWaypoint(index: number)
 
     humanoid:MoveTo(waypoint.Position)
     currentWaypointIndex = index
+    playAnimation("Move")
     return true
 end
 
@@ -232,6 +374,7 @@ RunService.Heartbeat:Connect(function()
     local path = computePath(targetRoot.Position)
     if not path then
         pendingRecomputeTime = now + 0.5
+        playAnimation("Idle")
         return
     end
     activeWaypoints = path:GetWaypoints()
