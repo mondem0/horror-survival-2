@@ -260,66 +260,96 @@ local function computePath(targetPosition)
     return path
 end
 
-local function followPath(targetRoot, path)
-    local waypoints = path:GetWaypoints()
-    if #waypoints == 0 then
-        clearVisualization()
-        return false
+local pathVersion = 0
+local currentTargetRoot
+local hasActivePath = false
+
+local function stopCurrentPath(expectedVersion)
+    if expectedVersion and pathVersion ~= expectedVersion then
+        return
     end
+
+    if hasActivePath then
+        pathVersion += 1
+    end
+
+    hasActivePath = false
+    currentTargetRoot = nil
+    playAnimation("Idle")
+    clearVisualization()
+end
+
+local function followWaypoints(waypoints, targetRoot)
+    pathVersion += 1
+    local thisVersion = pathVersion
+    currentTargetRoot = targetRoot
+    hasActivePath = true
 
     renderPath(waypoints)
     playAnimation("Move")
 
-    for _, waypoint in ipairs(waypoints) do
-        if not targetRoot.Parent then
-            return false
+    task.spawn(function()
+        for _, waypoint in ipairs(waypoints) do
+            if pathVersion ~= thisVersion then
+                return
+            end
+
+            if not currentTargetRoot or not currentTargetRoot.Parent then
+                stopCurrentPath(thisVersion)
+                return
+            end
+
+            if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
+                humanoid.Jump = true
+            end
+
+            humanoid:MoveTo(waypoint.Position)
+            local reached = humanoid.MoveToFinished:Wait()
+
+            if pathVersion ~= thisVersion then
+                return
+            end
+
+            if not reached then
+                stopCurrentPath(thisVersion)
+                return
+            end
         end
 
-        if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
-            humanoid.Jump = true
+        if pathVersion == thisVersion then
+            stopCurrentPath(thisVersion)
         end
-
-        humanoid:MoveTo(waypoint.Position)
-        local reached = humanoid.MoveToFinished:Wait()
-        if not reached then
-            return false
-        end
-    end
-
-    return true
+    end)
 end
 
 while true do
     local targetPlayer = getNearestPlayer()
     if not targetPlayer then
-        clearVisualization()
-        playAnimation("Idle")
+        stopCurrentPath(pathVersion)
         task.wait(CONFIG.RepathInterval)
         continue
     end
 
     local character = targetPlayer.Character
+    local targetHumanoid = character and character:FindFirstChildOfClass("Humanoid")
     local targetRoot = character and character:FindFirstChild("HumanoidRootPart")
-    if not targetRoot then
-        clearVisualization()
-        playAnimation("Idle")
+    if not targetRoot or not targetHumanoid or targetHumanoid.Health <= 0 then
+        stopCurrentPath(pathVersion)
         task.wait(CONFIG.RepathInterval)
         continue
     end
 
     local path = computePath(targetRoot.Position)
-    local success = false
     if path then
-        success = followPath(targetRoot, path)
+        local waypoints = path:GetWaypoints()
+        if #waypoints > 0 then
+            followWaypoints(waypoints, targetRoot)
+        else
+            stopCurrentPath(pathVersion)
+        end
     else
-        clearVisualization()
+        stopCurrentPath(pathVersion)
     end
-
-    if path and not success then
-        clearVisualization()
-    end
-
-    playAnimation("Idle")
 
     task.wait(CONFIG.RepathInterval)
 end
