@@ -267,6 +267,59 @@ local function applyWaypointSpacing(waypoints)
     return filtered
 end
 
+local function trimCompletedWaypoints(waypoints)
+    if #waypoints <= 1 then
+        return waypoints
+    end
+
+    local tolerance = math.max(CONFIG.WaypointSpacing or 0, 2)
+    local dynamic = humanoid.WalkSpeed * CONFIG.RepathInterval * 0.5
+    if dynamic > tolerance then
+        tolerance = math.min(dynamic, 12)
+    end
+
+    local moveDirection = humanoid.MoveDirection
+    local hasMoveDirection = moveDirection.Magnitude > 0.1
+    if hasMoveDirection then
+        moveDirection = moveDirection.Unit
+    end
+
+    local firstIndex = 1
+    for index, waypoint in ipairs(waypoints) do
+        local offset = waypoint.Position - root.Position
+        local distance = offset.Magnitude
+        local behind = false
+
+        if hasMoveDirection then
+            local projection = offset:Dot(moveDirection)
+            if projection < -tolerance then
+                behind = true
+            end
+        end
+
+        if distance <= tolerance or behind then
+            firstIndex = index + 1
+        else
+            break
+        end
+    end
+
+    if firstIndex > #waypoints then
+        firstIndex = #waypoints
+    end
+
+    local trimmed = {}
+    for index = firstIndex, #waypoints do
+        trimmed[#trimmed + 1] = waypoints[index]
+    end
+
+    if #trimmed == 0 then
+        trimmed[1] = waypoints[#waypoints]
+    end
+
+    return trimmed
+end
+
 local function getNearestPlayer()
     local nearestPlayer
     local nearestDistance = math.huge
@@ -457,6 +510,7 @@ while true do
 
     if selectedPath then
         local waypoints = applyWaypointSpacing(selectedPath:GetWaypoints())
+        waypoints = trimCompletedWaypoints(waypoints)
         if #waypoints > 0 then
             followWaypoints(waypoints, targetRoot)
         else

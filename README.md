@@ -16,6 +16,7 @@ Open the `CONFIG` table near the top of the script to tweak behaviour:
 - `AllowJump`: Set `true` if the NPC should obey jump waypoints produced by the pathfinder.
 - `PreferredDistance`: How far from the player (in studs) the enemy should try to stop. Adjust `GoalTolerance` to control how close it must get before idling.
 - `WaypointSpacing`: Minimum separation (in studs) to enforce between sequential waypoints if you want a sparser path.
+- The follower automatically skips waypoints that are already behind or extremely close to the NPC so fast movers don’t backtrack when a fresh path arrives.
 - `PathAgent`: Adjust the agent height/radius if your character model is taller or wider.
 - `Visualization.Enabled`: Toggle the neon line and waypoint spheres.
 - `Visualization` colours and sizes: Change the look of the rendered path.
