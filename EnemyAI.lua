@@ -121,12 +121,10 @@ local activeWaypoints: { PathWaypoint }? = nil
 local currentWaypointIndex = 0
 local pendingRecomputeTime = 0
 local lastTarget: Player? = nil
-local lastTargetPosition: Vector3? = nil
 
 local function clearActivePath()
     activeWaypoints = nil
     currentWaypointIndex = 0
-    lastTargetPosition = nil
     clearVisualization()
 end
 
@@ -199,21 +197,12 @@ RunService.Heartbeat:Connect(function()
         return
     end
 
-    local targetPosition = targetRoot.Position
-    if lastTargetPosition then
-        local drift = (targetPosition - lastTargetPosition).Magnitude
-        if drift < CONFIG.WaypointTolerance and activeWaypoints then
-            return
-        end
-    end
-
     local path = computePath(targetRoot.Position)
     if not path then
         pendingRecomputeTime = now + 0.5
         return
     end
     activeWaypoints = path:GetWaypoints()
-    lastTargetPosition = targetPosition
     renderPath(activeWaypoints)
 
     if not moveToWaypoint(math.min(#activeWaypoints, 2)) then
