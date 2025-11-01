@@ -13,6 +13,8 @@ local Config = {
     MovementSpeed = 10,
     WaypointReachThreshold = 2.5,
     PathRecalculateDistance = 10,
+    PathTargetDriftThreshold = 4,
+    MinPathRecomputeInterval = 0.35,
     LookThresholdDegrees = 45,
     RequireLineOfSightToPause = true,
     PathAgentParameters = {
@@ -113,6 +115,7 @@ local activePath: Path? = nil
 local currentWaypointIndex = 0
 local waypoints: {PathWaypointLike} = {}
 local currentTargetPosition: Vector3? = nil
+local lastPathOriginPosition: Vector3? = nil
 local isPaused = false
 local lastPauseActivity: string? = nil
 local currentPathBlockedConnection: RBXScriptConnection? = nil
@@ -127,6 +130,7 @@ local pathVisualizationItems: {Instance} = {}
 local lastVisualizationRootPosition: Vector3? = nil
 local lastVisualizationWaypointIndex = 0
 local visualizationAnchorPosition: Vector3? = nil
+local lastPathComputeTime = 0
 
 local function releaseActivePath()
     if currentPathBlockedConnection then
@@ -141,6 +145,7 @@ local function releaseActivePath()
     end
 
     activePath = nil
+    lastPathOriginPosition = nil
 end
 
 local function ensurePathVisualizationFolder(): Folder?
@@ -426,6 +431,7 @@ local function setMovementPaused(paused: boolean, pauseActivity: string?)
         clearMovement()
         setActivity(pauseActivity or "Idle")
         clearPathVisualization()
+        lastPathComputeTime = 0
     else
         if not isPaused then
             return
@@ -530,8 +536,10 @@ local function computePath(targetPosition: Vector3)
     currentTargetPosition = targetPosition
     visualizationAnchorPosition = root.Position
 
+    local computeOrigin = root.Position
+
     local success, errorMessage = pcall(function()
-        path:ComputeAsync(root.Position, targetPosition)
+        path:ComputeAsync(computeOrigin, targetPosition)
     end)
 
     if not success or path.Status ~= Enum.PathStatus.Success then
@@ -541,6 +549,7 @@ local function computePath(targetPosition: Vector3)
         currentTargetPosition = nil
         releaseActivePath()
         clearPathVisualization()
+        lastPathComputeTime = 0
         if not isPaused then
             setActivity("Idle")
         end
@@ -570,6 +579,8 @@ local function computePath(targetPosition: Vector3)
     end
 
     currentWaypointIndex = 1
+    lastPathOriginPosition = computeOrigin
+    lastPathComputeTime = os.clock()
 
     currentPathBlockedConnection = path.Blocked:Connect(function(blockedWaypointIndex)
         if isPaused then
@@ -674,11 +685,19 @@ local function moveTowardsPlayer(player: Player, dt: number)
 
     setActivity("Moving")
 
-    if currentWaypointIndex == 0
-        or not currentTargetPosition
-        or (currentTargetPosition - targetPart.Position).Magnitude >= 2
-        or (targetPart.Position - root.Position).Magnitude >= Config.PathRecalculateDistance
-    then
+    local now = os.clock()
+    local needsPath = currentWaypointIndex == 0 or not currentTargetPosition
+    local targetDrifted = false
+    if currentTargetPosition then
+        targetDrifted = (currentTargetPosition - targetPart.Position).Magnitude >= Config.PathTargetDriftThreshold
+    end
+
+    local originDrifted = false
+    if lastPathOriginPosition then
+        originDrifted = (root.Position - lastPathOriginPosition).Magnitude >= Config.PathRecalculateDistance
+    end
+
+    if needsPath or ((targetDrifted or originDrifted) and (now - lastPathComputeTime) >= Config.MinPathRecomputeInterval) then
         computePath(targetPart.Position)
     end
 

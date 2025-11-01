@@ -13,8 +13,8 @@ This repository provides a Roblox enemy AI Script (`EnemyAI.lua`) that makes an 
 
 ## Customization Tips
 - Open the `Config` table near the top of `EnemyAI.lua` to tweak behaviour:
-  - `MovementSpeed`, `WaypointReachThreshold`, and `PathRecalculateDistance` control chase movement.
-  - `PathAgentParameters` (radius, height, can jump) should match the size of your enemy for best pathfinding results.
+  - `MovementSpeed`, `WaypointReachThreshold`, `PathTargetDriftThreshold`, and `MinPathRecomputeInterval` help the NPC keep chasing smoothly while continuously refreshing its path.
+  - `PathRecalculateDistance` and `PathAgentParameters` (radius, height, can jump) should match the size of your enemy for best pathfinding results.
   - `PathVisualization` draws the current path using neon segments and waypoint orbs so you can see where the AI plans to move. Adjust colours, thickness, waypoint size, or set `Enabled = false` if you want to hide it. You can also assign a specific parent (e.g. a dedicated folder in `Workspace`).
   - `LookThresholdDegrees` adjusts how wide the vision cone is for freezing behaviour.
 - `RequireLineOfSightToPause` controls whether the NPC only freezes when the player has a clear raycast to the enemy. Leave it enabled to prevent the NPC from stopping through walls.
