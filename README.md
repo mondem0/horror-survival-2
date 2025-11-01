@@ -17,6 +17,10 @@ Open the `CONFIG` table near the top of the script to customize behaviour:
 
 - `RecomputeDelay`: How often (in seconds) the enemy refreshes its path to the target.
 - `WaypointTolerance`: How close the NPC must get to a waypoint before advancing.
+- `TargetDriftRepathDistance`: Horizontal distance (in studs) the player must move before the NPC instantly recomputes its path instead of waiting for the next refresh window.
+- `TargetDriftRepathHeight`: Vertical change that also triggers an immediate path recompute—handy when players jump onto platforms.
+- `StuckTime`: How long (in seconds) the NPC will try to reach the same waypoint before abandoning the route and requesting a new one.
+- `StuckDistance`: Extra distance (in studs) the NPC expects to close within the `StuckTime` window. Increase this slightly if the character moves slowly.
 - `Visualization.Enabled`: Turn the neon path rendering on or off.
 - `Visualization.SegmentThickness` and `Visualization.WaypointSize`: Adjust the look of the visual path.
 - `Visualization.Color`: Change the path colour.

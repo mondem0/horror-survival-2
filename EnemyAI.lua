@@ -32,6 +32,10 @@ local CONFIG = {
     },
     RecomputeDelay = 0.75,
     WaypointTolerance = 1.5,
+    TargetDriftRepathDistance = 6,
+    TargetDriftRepathHeight = 4,
+    StuckTime = 2,
+    StuckDistance = 0.5,
     Animations = {
         TransitionTime = 0.2,
         Idle = nil, -- Accepts an asset id (string/number) or table with Id/Looped/Priority fields
@@ -275,14 +279,35 @@ end
 
 local activeWaypoints: { PathWaypoint }? = nil
 local currentWaypointIndex = 0
+local currentMoveGoal: Vector3? = nil
+local currentWaypointStartTime = 0
+local currentWaypointStartDistance: number? = nil
 local pendingRecomputeTime = 0
 local lastTarget: Player? = nil
+local lastTargetPosition: Vector3? = nil
 
-local function clearActivePath()
+local function clearActivePath(shouldIdle: boolean)
     activeWaypoints = nil
     currentWaypointIndex = 0
+    currentMoveGoal = nil
+    currentWaypointStartTime = 0
+    currentWaypointStartDistance = nil
     clearVisualization()
-    playAnimation("Idle")
+    if shouldIdle then
+        playAnimation("Idle")
+    end
+end
+
+local function applyJumpIfNeeded(waypoint: PathWaypoint)
+    if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
+        local floorMaterial = humanoid.FloorMaterial
+        if floorMaterial and floorMaterial ~= Enum.Material.Air then
+            if humanoid.ChangeState then
+                humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            end
+            humanoid.Jump = true
+        end
+    end
 end
 
 local function moveToWaypoint(index: number)
@@ -295,52 +320,57 @@ local function moveToWaypoint(index: number)
         return false
     end
 
-    if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
-        local floorMaterial = humanoid.FloorMaterial
-        if floorMaterial and floorMaterial ~= Enum.Material.Air then
-            if humanoid.ChangeState then
-                humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-            end
-            humanoid.Jump = true
-        end
-    end
-
+    applyJumpIfNeeded(waypoint)
     humanoid:MoveTo(waypoint.Position)
     currentWaypointIndex = index
+    currentMoveGoal = waypoint.Position
+    currentWaypointStartTime = time()
+    currentWaypointStartDistance = (root.Position - waypoint.Position).Magnitude
     playAnimation("Move")
     return true
 end
 
-humanoid.MoveToFinished:Connect(function(reached)
-    if not activeWaypoints then
+local function ensureMovementTowardsWaypoint(now: number)
+    if not activeWaypoints or currentWaypointIndex == 0 then
         return
     end
 
-    if not reached then
-        local currentWaypoint = activeWaypoints[currentWaypointIndex]
-        if currentWaypoint then
-            local tolerance = CONFIG.WaypointTolerance
-            if currentWaypoint.Action == Enum.PathWaypointAction.Jump then
-                tolerance = tolerance * CONFIG.JumpToleranceMultiplier
-            end
-            if (root.Position - currentWaypoint.Position).Magnitude <= tolerance then
-                reached = true
-            end
+    local waypoint = activeWaypoints[currentWaypointIndex]
+    if not waypoint then
+        clearActivePath(false)
+        pendingRecomputeTime = now
+        return
+    end
+
+    local tolerance = CONFIG.WaypointTolerance
+    if waypoint.Action == Enum.PathWaypointAction.Jump then
+        tolerance = tolerance * CONFIG.JumpToleranceMultiplier
+    end
+
+    local distance = (root.Position - waypoint.Position).Magnitude
+    if distance <= tolerance then
+        if not moveToWaypoint(currentWaypointIndex + 1) then
+            clearActivePath(false)
+            pendingRecomputeTime = now
+        end
+        return
+    end
+
+    if not currentMoveGoal or (currentMoveGoal - waypoint.Position).Magnitude > 0.05 then
+        moveToWaypoint(currentWaypointIndex)
+        return
+    end
+
+    if currentWaypointStartTime > 0 and now - currentWaypointStartTime >= CONFIG.StuckTime then
+        if not currentWaypointStartDistance or distance > math.max(tolerance, currentWaypointStartDistance - CONFIG.StuckDistance) then
+            clearActivePath(false)
+            pendingRecomputeTime = now
+        else
+            currentWaypointStartTime = now
+            currentWaypointStartDistance = distance
         end
     end
-
-    if not reached then
-        clearActivePath()
-        pendingRecomputeTime = time() + 0.25
-        return
-    end
-
-    local nextIndex = currentWaypointIndex + 1
-    if not moveToWaypoint(nextIndex) then
-        clearActivePath()
-        pendingRecomputeTime = time() -- reached end, refresh soon
-    end
-end)
+end
 
 RunService.Heartbeat:Connect(function()
     if not root or not root.Parent then
@@ -349,40 +379,79 @@ RunService.Heartbeat:Connect(function()
 
     local targetPlayer = getNearestPlayer()
     if not targetPlayer then
-        clearActivePath()
+        if activeWaypoints then
+            clearActivePath(true)
+        else
+            playAnimation("Idle")
+        end
         lastTarget = nil
+        lastTargetPosition = nil
         return
     end
 
     if targetPlayer ~= lastTarget then
         pendingRecomputeTime = 0
         lastTarget = targetPlayer
+        lastTargetPosition = nil
     end
 
     local targetCharacter = targetPlayer.Character
     local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
     if not targetRoot then
-        clearActivePath()
+        if activeWaypoints then
+            clearActivePath(true)
+        else
+            playAnimation("Idle")
+        end
         return
     end
 
     local now = time()
+    local targetPosition = targetRoot.Position
+
+    if lastTargetPosition then
+        local horizontalDelta = Vector3.new(targetPosition.X, 0, targetPosition.Z) - Vector3.new(lastTargetPosition.X, 0, lastTargetPosition.Z)
+        if horizontalDelta.Magnitude >= CONFIG.TargetDriftRepathDistance or math.abs(targetPosition.Y - lastTargetPosition.Y) >= CONFIG.TargetDriftRepathHeight then
+            pendingRecomputeTime = 0
+        end
+    end
+
     if now < pendingRecomputeTime then
+        ensureMovementTowardsWaypoint(now)
         return
     end
 
-    local path = computePath(targetRoot.Position)
+    local path = computePath(targetPosition)
     if not path then
         pendingRecomputeTime = now + 0.5
-        playAnimation("Idle")
+        if not activeWaypoints then
+            playAnimation("Idle")
+        else
+            clearActivePath(true)
+        end
         return
     end
+
     activeWaypoints = path:GetWaypoints()
     renderPath(activeWaypoints)
 
-    if not moveToWaypoint(math.min(#activeWaypoints, 2)) then
-        clearActivePath()
-    else
+    local startingIndex = 1
+    if activeWaypoints[1] and (activeWaypoints[1].Position - root.Position).Magnitude <= CONFIG.WaypointTolerance then
+        startingIndex = math.min(2, #activeWaypoints)
+    end
+
+    if startingIndex == 0 or #activeWaypoints == 0 then
+        clearActivePath(false)
         pendingRecomputeTime = now + CONFIG.RecomputeDelay
+        lastTargetPosition = targetPosition
+        return
+    end
+
+    if moveToWaypoint(startingIndex) then
+        pendingRecomputeTime = now + CONFIG.RecomputeDelay
+        lastTargetPosition = targetPosition
+        ensureMovementTowardsWaypoint(now)
+    else
+        clearActivePath(true)
     end
 end)
