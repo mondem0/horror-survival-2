@@ -3,7 +3,6 @@
 
 local PathfindingService = game:GetService("PathfindingService")
 local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
 
 local npc = script.Parent
 if not npc or not npc:IsA("Model") then
@@ -14,32 +13,24 @@ local humanoid = npc:FindFirstChildOfClass("Humanoid")
 if not humanoid then
     error("NPC requires a Humanoid for movement")
 end
-local root = npc.PrimaryPart
-if not root then
-    root = npc:FindFirstChild("HumanoidRootPart")
-end
+
+local root = npc.PrimaryPart or npc:FindFirstChild("HumanoidRootPart")
 if not root then
     error("NPC requires a PrimaryPart or HumanoidRootPart for navigation")
 end
 
 local CONFIG = {
-    AllowJump = false,
-    JumpToleranceMultiplier = 1.8,
+    RepathInterval = 1.0, -- Seconds between path recomputations.
+    AllowJump = false, -- Set true if the enemy should obey jump waypoints.
+    Animations = {
+        TransitionTime = 0.2,
+        Idle = nil, -- Accepts animation ids (string/number) or Animation instances.
+        Move = nil,
+    },
     PathAgent = {
         AgentHeight = 6,
         AgentRadius = 2,
         AgentCanJump = false,
-    },
-    RecomputeDelay = 0.75,
-    WaypointTolerance = 1.5,
-    TargetDriftRepathDistance = 6,
-    TargetDriftRepathHeight = 4,
-    StuckTime = 2,
-    StuckDistance = 0.5,
-    Animations = {
-        TransitionTime = 0.2,
-        Idle = nil, -- Accepts an asset id (string/number) or table with Id/Looped/Priority fields
-        Move = nil,
     },
     Visualization = {
         Enabled = true,
@@ -52,15 +43,11 @@ local CONFIG = {
 CONFIG.PathAgent.AgentCanJump = CONFIG.AllowJump
 
 local function syncJumpCapability()
-    if humanoid then
-        if humanoid.SetStateEnabled then
-            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, CONFIG.AllowJump)
-        end
-        if CONFIG.AllowJump and humanoid.UseJumpPower ~= nil then
-            humanoid.UseJumpPower = true
-        elseif not CONFIG.AllowJump and humanoid.UseJumpPower ~= nil then
-            humanoid.UseJumpPower = false
-        end
+    if humanoid.SetStateEnabled then
+        humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, CONFIG.AllowJump)
+    end
+    if humanoid.UseJumpPower ~= nil then
+        humanoid.UseJumpPower = CONFIG.AllowJump
     end
 end
 
@@ -73,7 +60,7 @@ if not animator then
 end
 
 local function normalizeAssetId(raw)
-    if raw == nil then
+    if not raw or raw == "" then
         return nil
     end
 
@@ -81,9 +68,6 @@ local function normalizeAssetId(raw)
     if valueType == "number" then
         return "rbxassetid://" .. raw
     elseif valueType == "string" then
-        if raw == "" then
-            return nil
-        end
         if raw:match("^rbxassetid://") then
             return raw
         end
@@ -91,27 +75,29 @@ local function normalizeAssetId(raw)
             return "rbxassetid://" .. raw
         end
         return raw
+    elseif valueType == "Instance" and raw:IsA("Animation") then
+        return raw.AnimationId
     end
 
     return nil
 end
 
-local function loadAnimationFromConfig(entry)
+local function loadAnimation(entry)
     if not entry then
         return nil
     end
 
-    local entryType = typeof(entry)
     local animationInstance
     local priority
-    local looped
+    local looped = true
 
-    if entryType == "Instance" and entry:IsA("Animation") then
+    if typeof(entry) == "Instance" and entry:IsA("Animation") then
         animationInstance = entry
-    elseif entryType == "table" then
+    elseif typeof(entry) == "table" then
         priority = entry.Priority
-        looped = entry.Looped
-
+        if entry.Looped ~= nil then
+            looped = entry.Looped
+        end
         if entry.Animation and typeof(entry.Animation) == "Instance" and entry.Animation:IsA("Animation") then
             animationInstance = entry.Animation
         else
@@ -121,7 +107,7 @@ local function loadAnimationFromConfig(entry)
             end
             animationInstance = Instance.new("Animation")
             animationInstance.AnimationId = id
-            animationInstance.Name = entry.Name or "EnemyConfiguredAnimation"
+            animationInstance.Name = entry.Name or "EnemyAnimation"
             animationInstance.Parent = script
         end
     else
@@ -131,7 +117,7 @@ local function loadAnimationFromConfig(entry)
         end
         animationInstance = Instance.new("Animation")
         animationInstance.AnimationId = id
-        animationInstance.Name = "EnemyConfiguredAnimation"
+        animationInstance.Name = "EnemyAnimation"
         animationInstance.Parent = script
     end
 
@@ -151,11 +137,7 @@ local function loadAnimationFromConfig(entry)
     end
 
     local track = trackOrError
-    if looped ~= nil then
-        track.Looped = looped
-    else
-        track.Looped = true
-    end
+    track.Looped = looped
 
     if priority then
         pcall(function()
@@ -167,35 +149,29 @@ local function loadAnimationFromConfig(entry)
 end
 
 local animationTracks = {
-    Idle = loadAnimationFromConfig(CONFIG.Animations and CONFIG.Animations.Idle),
-    Move = loadAnimationFromConfig(CONFIG.Animations and CONFIG.Animations.Move),
+    Idle = loadAnimation(CONFIG.Animations and CONFIG.Animations.Idle),
+    Move = loadAnimation(CONFIG.Animations and CONFIG.Animations.Move),
 }
 
-local currentAnimationName = nil
-
-local function animationTransitionTime()
-    if CONFIG.Animations and CONFIG.Animations.TransitionTime then
-        return CONFIG.Animations.TransitionTime
-    end
-    return 0.2
-end
+local currentAnimation
 
 local function playAnimation(name)
-    if currentAnimationName == name then
+    if currentAnimation == name then
         return
     end
 
-    local fadeTime = animationTransitionTime()
+    local transition = (CONFIG.Animations and CONFIG.Animations.TransitionTime) or 0.2
+
     for trackName, track in pairs(animationTracks) do
         if track and track.IsPlaying and trackName ~= name then
-            track:Stop(fadeTime)
+            track:Stop(transition)
         end
     end
 
-    currentAnimationName = name
+    currentAnimation = name
     local track = animationTracks[name]
     if track then
-        track:Play(fadeTime)
+        track:Play(transition)
     end
 end
 
@@ -211,7 +187,7 @@ local function clearVisualization()
     end
 end
 
-local function drawSegment(startPos: Vector3, endPos: Vector3)
+local function drawSegment(startPos, endPos)
     local part = Instance.new("Part")
     part.Anchored = true
     part.CanCollide = false
@@ -222,7 +198,7 @@ local function drawSegment(startPos: Vector3, endPos: Vector3)
     part.Parent = visualizationFolder
 end
 
-local function drawWaypoint(position: Vector3)
+local function drawWaypoint(position)
     local part = Instance.new("Part")
     part.Anchored = true
     part.CanCollide = false
@@ -234,224 +210,116 @@ local function drawWaypoint(position: Vector3)
     part.Parent = visualizationFolder
 end
 
-local function renderPath(waypoints: { PathWaypoint })
+local function renderPath(waypoints)
     clearVisualization()
+
     if not CONFIG.Visualization.Enabled then
         return
     end
+
     for index = 1, #waypoints do
-        drawWaypoint(waypoints[index].Position)
+        local waypoint = waypoints[index]
+        drawWaypoint(waypoint.Position)
         if index > 1 then
-            drawSegment(waypoints[index - 1].Position, waypoints[index].Position)
+            drawSegment(waypoints[index - 1].Position, waypoint.Position)
         end
     end
 end
 
-local function getNearestPlayer(): Player?
-    local nearestPlayer = nil
+local function getNearestPlayer()
+    local nearestPlayer
     local nearestDistance = math.huge
+
     for _, player in ipairs(Players:GetPlayers()) do
         local character = player.Character
-        local hrp = character and character:FindFirstChild("HumanoidRootPart")
-        local humanoidTarget = character and character:FindFirstChildOfClass("Humanoid")
-        if character and hrp and humanoidTarget and humanoidTarget.Health > 0 then
-            local distance = (hrp.Position - root.Position).Magnitude
+        local targetRoot = character and character:FindFirstChild("HumanoidRootPart")
+        local targetHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+        if targetRoot and targetHumanoid and targetHumanoid.Health > 0 then
+            local distance = (targetRoot.Position - root.Position).Magnitude
             if distance < nearestDistance then
                 nearestDistance = distance
                 nearestPlayer = player
             end
         end
     end
+
     return nearestPlayer
 end
 
-local function computePath(targetPosition: Vector3)
+local function computePath(targetPosition)
     local path = PathfindingService:CreatePath(CONFIG.PathAgent)
     local success, errorMessage = pcall(function()
         path:ComputeAsync(root.Position, targetPosition)
     end)
+
     if not success or path.Status ~= Enum.PathStatus.Success then
         warn("Enemy path computation failed", errorMessage)
         return nil
     end
+
     return path
 end
 
-local activeWaypoints: { PathWaypoint }? = nil
-local currentWaypointIndex = 0
-local currentMoveGoal: Vector3? = nil
-local currentWaypointStartTime = 0
-local currentWaypointStartDistance: number? = nil
-local pendingRecomputeTime = 0
-local lastTarget: Player? = nil
-local lastTargetPosition: Vector3? = nil
-
-local function clearActivePath(shouldIdle: boolean)
-    activeWaypoints = nil
-    currentWaypointIndex = 0
-    currentMoveGoal = nil
-    currentWaypointStartTime = 0
-    currentWaypointStartDistance = nil
-    clearVisualization()
-    if shouldIdle then
-        playAnimation("Idle")
+local function followPath(targetRoot, path)
+    local waypoints = path:GetWaypoints()
+    if #waypoints == 0 then
+        clearVisualization()
+        return false
     end
-end
 
-local function applyJumpIfNeeded(waypoint: PathWaypoint)
-    if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
-        local floorMaterial = humanoid.FloorMaterial
-        if floorMaterial and floorMaterial ~= Enum.Material.Air then
-            if humanoid.ChangeState then
-                humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-            end
+    renderPath(waypoints)
+    playAnimation("Move")
+
+    for _, waypoint in ipairs(waypoints) do
+        if not targetRoot.Parent then
+            return false
+        end
+
+        if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
             humanoid.Jump = true
         end
-    end
-end
 
-local function moveToWaypoint(index: number)
-    if not activeWaypoints then
-        return false
-    end
-
-    local waypoint = activeWaypoints[index]
-    if not waypoint then
-        return false
+        humanoid:MoveTo(waypoint.Position)
+        local reached = humanoid.MoveToFinished:Wait()
+        if not reached then
+            return false
+        end
     end
 
-    applyJumpIfNeeded(waypoint)
-    humanoid:MoveTo(waypoint.Position)
-    currentWaypointIndex = index
-    currentMoveGoal = waypoint.Position
-    currentWaypointStartTime = time()
-    currentWaypointStartDistance = (root.Position - waypoint.Position).Magnitude
-    playAnimation("Move")
     return true
 end
 
-local function ensureMovementTowardsWaypoint(now: number)
-    if not activeWaypoints or currentWaypointIndex == 0 then
-        return
-    end
-
-    local waypoint = activeWaypoints[currentWaypointIndex]
-    if not waypoint then
-        clearActivePath(false)
-        pendingRecomputeTime = now
-        return
-    end
-
-    local tolerance = CONFIG.WaypointTolerance
-    if waypoint.Action == Enum.PathWaypointAction.Jump then
-        tolerance = tolerance * CONFIG.JumpToleranceMultiplier
-    end
-
-    local distance = (root.Position - waypoint.Position).Magnitude
-    if distance <= tolerance then
-        if not moveToWaypoint(currentWaypointIndex + 1) then
-            clearActivePath(false)
-            pendingRecomputeTime = now
-        end
-        return
-    end
-
-    if not currentMoveGoal or (currentMoveGoal - waypoint.Position).Magnitude > 0.05 then
-        moveToWaypoint(currentWaypointIndex)
-        return
-    end
-
-    if currentWaypointStartTime > 0 and now - currentWaypointStartTime >= CONFIG.StuckTime then
-        if not currentWaypointStartDistance or distance > math.max(tolerance, currentWaypointStartDistance - CONFIG.StuckDistance) then
-            clearActivePath(false)
-            pendingRecomputeTime = now
-        else
-            currentWaypointStartTime = now
-            currentWaypointStartDistance = distance
-        end
-    end
-end
-
-RunService.Heartbeat:Connect(function()
-    if not root or not root.Parent then
-        return
-    end
-
+while true do
     local targetPlayer = getNearestPlayer()
     if not targetPlayer then
-        if activeWaypoints then
-            clearActivePath(true)
-        else
-            playAnimation("Idle")
-        end
-        lastTarget = nil
-        lastTargetPosition = nil
-        return
+        clearVisualization()
+        playAnimation("Idle")
+        task.wait(CONFIG.RepathInterval)
+        continue
     end
 
-    if targetPlayer ~= lastTarget then
-        pendingRecomputeTime = 0
-        lastTarget = targetPlayer
-        lastTargetPosition = nil
-    end
-
-    local targetCharacter = targetPlayer.Character
-    local targetRoot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+    local character = targetPlayer.Character
+    local targetRoot = character and character:FindFirstChild("HumanoidRootPart")
     if not targetRoot then
-        if activeWaypoints then
-            clearActivePath(true)
-        else
-            playAnimation("Idle")
-        end
-        return
+        clearVisualization()
+        playAnimation("Idle")
+        task.wait(CONFIG.RepathInterval)
+        continue
     end
 
-    local now = time()
-    local targetPosition = targetRoot.Position
-
-    if lastTargetPosition then
-        local horizontalDelta = Vector3.new(targetPosition.X, 0, targetPosition.Z) - Vector3.new(lastTargetPosition.X, 0, lastTargetPosition.Z)
-        if horizontalDelta.Magnitude >= CONFIG.TargetDriftRepathDistance or math.abs(targetPosition.Y - lastTargetPosition.Y) >= CONFIG.TargetDriftRepathHeight then
-            pendingRecomputeTime = 0
-        end
-    end
-
-    if now < pendingRecomputeTime then
-        ensureMovementTowardsWaypoint(now)
-        return
-    end
-
-    local path = computePath(targetPosition)
-    if not path then
-        pendingRecomputeTime = now + 0.5
-        if not activeWaypoints then
-            playAnimation("Idle")
-        else
-            clearActivePath(true)
-        end
-        return
-    end
-
-    activeWaypoints = path:GetWaypoints()
-    renderPath(activeWaypoints)
-
-    local startingIndex = 1
-    if activeWaypoints[1] and (activeWaypoints[1].Position - root.Position).Magnitude <= CONFIG.WaypointTolerance then
-        startingIndex = math.min(2, #activeWaypoints)
-    end
-
-    if startingIndex == 0 or #activeWaypoints == 0 then
-        clearActivePath(false)
-        pendingRecomputeTime = now + CONFIG.RecomputeDelay
-        lastTargetPosition = targetPosition
-        return
-    end
-
-    if moveToWaypoint(startingIndex) then
-        pendingRecomputeTime = now + CONFIG.RecomputeDelay
-        lastTargetPosition = targetPosition
-        ensureMovementTowardsWaypoint(now)
+    local path = computePath(targetRoot.Position)
+    local success = false
+    if path then
+        success = followPath(targetRoot, path)
     else
-        clearActivePath(true)
+        clearVisualization()
     end
-end)
+
+    if path and not success then
+        clearVisualization()
+    end
+
+    playAnimation("Idle")
+
+    task.wait(CONFIG.RepathInterval)
+end
