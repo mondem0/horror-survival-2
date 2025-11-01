@@ -24,6 +24,7 @@ end
 
 local CONFIG = {
     AllowJump = false,
+    JumpToleranceMultiplier = 1.8,
     PathAgent = {
         AgentHeight = 6,
         AgentRadius = 2,
@@ -40,6 +41,21 @@ local CONFIG = {
 }
 
 CONFIG.PathAgent.AgentCanJump = CONFIG.AllowJump
+
+local function syncJumpCapability()
+    if humanoid then
+        if humanoid.SetStateEnabled then
+            humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, CONFIG.AllowJump)
+        end
+        if CONFIG.AllowJump and humanoid.UseJumpPower ~= nil then
+            humanoid.UseJumpPower = true
+        elseif not CONFIG.AllowJump and humanoid.UseJumpPower ~= nil then
+            humanoid.UseJumpPower = false
+        end
+    end
+end
+
+syncJumpCapability()
 
 local visualizationFolder = Instance.new("Folder")
 visualizationFolder.Name = "EnemyPathVisualization"
@@ -141,7 +157,10 @@ local function moveToWaypoint(index: number)
     if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
         local floorMaterial = humanoid.FloorMaterial
         if floorMaterial and floorMaterial ~= Enum.Material.Air then
-            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            if humanoid.ChangeState then
+                humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+            end
+            humanoid.Jump = true
         end
     end
 
@@ -153,6 +172,19 @@ end
 humanoid.MoveToFinished:Connect(function(reached)
     if not activeWaypoints then
         return
+    end
+
+    if not reached then
+        local currentWaypoint = activeWaypoints[currentWaypointIndex]
+        if currentWaypoint then
+            local tolerance = CONFIG.WaypointTolerance
+            if currentWaypoint.Action == Enum.PathWaypointAction.Jump then
+                tolerance = tolerance * CONFIG.JumpToleranceMultiplier
+            end
+            if (root.Position - currentWaypoint.Position).Magnitude <= tolerance then
+                reached = true
+            end
+        end
     end
 
     if not reached then

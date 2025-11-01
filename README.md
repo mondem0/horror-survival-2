@@ -21,6 +21,7 @@ Open the `CONFIG` table near the top of the script to customize behaviour:
 - `Visualization.SegmentThickness` and `Visualization.WaypointSize`: Adjust the look of the visual path.
 - `Visualization.Color`: Change the path colour.
 - `AllowJump`: Let the NPC obey pathfinding jump commands when true; disabled by default to keep enemies grounded.
+- `JumpToleranceMultiplier`: Extra distance the NPC will accept when it finishes a jump waypoint so minor ledge misalignments don't cause it to stall. Increase this slightly if your enemy still hesitates on small platforms.
 
 If the NPC gets stuck, try increasing the path agent radius/height values or giving the enemy more room to move.
 
