@@ -14,6 +14,7 @@ local Config = {
     WaypointReachThreshold = 2.5,
     PathRecalculateDistance = 10,
     LookThresholdDegrees = 45,
+    RequireLineOfSightToPause = true,
     PathAgentParameters = {
         AgentRadius = 3,
         AgentHeight = 6,
@@ -38,12 +39,18 @@ local Config = {
             Moving = nil,
             Watched = nil,
         },
+        Priorities = {
+            Idle = Enum.AnimationPriority.Idle,
+            Moving = Enum.AnimationPriority.Movement,
+            Watched = Enum.AnimationPriority.Action,
+        },
     },
 }
 
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 local PathfindingService = game:GetService("PathfindingService")
+local Workspace = game:GetService("Workspace")
 
 local npc = script.Parent
 if not npc or not npc:IsA("Model") then
@@ -101,13 +108,14 @@ if not npc.PrimaryPart then
 end
 
 local LOOK_THRESHOLD = math.rad(Config.LookThresholdDegrees)
-local path: Path = PathfindingService:CreatePath(Config.PathAgentParameters)
+local activePath: Path? = nil
 
 local currentWaypointIndex = 0
 local waypoints: {PathWaypointLike} = {}
 local currentTargetPosition: Vector3? = nil
 local isPaused = false
 local lastPauseActivity: string? = nil
+local currentPathBlockedConnection: RBXScriptConnection? = nil
 
 local currentActivity = "Idle"
 local animator: Animator? = nil
@@ -119,6 +127,21 @@ local pathVisualizationItems: {Instance} = {}
 local lastVisualizationRootPosition: Vector3? = nil
 local lastVisualizationWaypointIndex = 0
 local visualizationAnchorPosition: Vector3? = nil
+
+local function releaseActivePath()
+    if currentPathBlockedConnection then
+        currentPathBlockedConnection:Disconnect()
+        currentPathBlockedConnection = nil
+    end
+
+    if activePath then
+        pcall(function()
+            activePath:Destroy()
+        end)
+    end
+
+    activePath = nil
+end
 
 local function ensurePathVisualizationFolder(): Folder?
     if not Config.PathVisualization.Enabled then
@@ -291,16 +314,34 @@ local function setupAnimations()
         return
     end
 
+    local defaultPriorities = {
+        Idle = Enum.AnimationPriority.Idle,
+        Moving = Enum.AnimationPriority.Movement,
+        Watched = Enum.AnimationPriority.Action,
+    }
+
+    local configuredPriorities = Config.AnimationConfig.Priorities or {}
+
     for state, animationId in pairs(Config.AnimationConfig.AnimationIds) do
         if animationId then
-            local animation = Instance.new("Animation")
-            animation.AnimationId = animationId
-            animation.Name = string.format("Enemy_%sAnimation", state)
+            local resolvedId = animationId
+            if typeof(resolvedId) == "number" then
+                resolvedId = "rbxassetid://" .. resolvedId
+            elseif typeof(resolvedId) == "string" and not resolvedId:lower():match("^rbxassetid://") then
+                resolvedId = "rbxassetid://" .. resolvedId
+            end
 
-            local track = anim:LoadAnimation(animation)
-            track.Looped = true
-            track.Priority = Enum.AnimationPriority.Movement
-            animationTracks[state] = track
+            if typeof(resolvedId) == "string" then
+                local animation = Instance.new("Animation")
+                animation.AnimationId = resolvedId
+                animation.Name = string.format("Enemy_%sAnimation", state)
+                animation.Priority = configuredPriorities[state] or defaultPriorities[state] or Enum.AnimationPriority.Movement
+                animation.Parent = script
+
+                local track = anim:LoadAnimation(animation)
+                track.Looped = true
+                animationTracks[state] = track
+            end
         end
     end
 end
@@ -317,13 +358,14 @@ local function playAnimationFor(activity: string)
 
     if currentAnimationTrack and currentAnimationTrack ~= desiredTrack then
         if currentAnimationTrack.IsPlaying then
-            currentAnimationTrack:Stop()
+            currentAnimationTrack:Stop(0.15)
         end
     end
 
     currentAnimationTrack = desiredTrack
     if not desiredTrack.IsPlaying then
-        desiredTrack:Play()
+        desiredTrack:Play(0.1, 1, 1)
+        desiredTrack:AdjustSpeed(1)
     end
 end
 
@@ -364,6 +406,7 @@ local function setMovementPaused(paused: boolean, pauseActivity: string?)
         waypoints = {}
         currentWaypointIndex = 0
         currentTargetPosition = nil
+        releaseActivePath()
         clearMovement()
         setActivity(pauseActivity or "Idle")
         clearPathVisualization()
@@ -410,6 +453,25 @@ local function getClosestPlayer(): Player?
     return closestPlayer
 end
 
+local function hasLineOfSightToNPC(character: Model, origin: Vector3, target: Vector3): boolean
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {npc, character}
+    params.IgnoreWater = true
+
+    local direction = target - origin
+    local result = Workspace:Raycast(origin, direction, params)
+    if not result then
+        return true
+    end
+
+    if result.Instance and (result.Instance:IsDescendantOf(character) or result.Instance:IsDescendantOf(npc)) then
+        return true
+    end
+
+    return false
+end
+
 local function isPlayerLookingAtNPC(player: Player): boolean
     local character = player.Character
     if not character then
@@ -433,10 +495,22 @@ local function isPlayerLookingAtNPC(player: Player): boolean
     local dot = lookVector:Dot(directionToNPC)
     local angle = math.acos(math.clamp(dot, -1, 1))
 
-    return angle < LOOK_THRESHOLD
+    if angle >= LOOK_THRESHOLD then
+        return false
+    end
+
+    if not Config.RequireLineOfSightToPause then
+        return true
+    end
+
+    return hasLineOfSightToNPC(character, head.Position, root.Position)
 end
 
 local function computePath(targetPosition: Vector3)
+    releaseActivePath()
+
+    local path = PathfindingService:CreatePath(Config.PathAgentParameters)
+    activePath = path
     currentTargetPosition = targetPosition
     visualizationAnchorPosition = root.Position
 
@@ -449,6 +523,7 @@ local function computePath(targetPosition: Vector3)
         waypoints = {}
         currentWaypointIndex = 0
         currentTargetPosition = nil
+        releaseActivePath()
         clearPathVisualization()
         if not isPaused then
             setActivity("Idle")
@@ -465,25 +540,35 @@ local function computePath(targetPosition: Vector3)
         }
     end
 
-    if #waypoints == 0 then
-        table.insert(waypoints, {
-            Position = targetPosition,
-            Action = Enum.PathWaypointAction.Walk,
-        })
-    end
-
     if #waypoints > 0 and (waypoints[1].Position - root.Position).Magnitude < 0.5 then
         table.remove(waypoints, 1)
     end
 
     if #waypoints == 0 then
-        table.insert(waypoints, {
-            Position = targetPosition,
-            Action = Enum.PathWaypointAction.Walk,
-        })
+        releaseActivePath()
+        waypoints = {}
+        currentWaypointIndex = 0
+        currentTargetPosition = nil
+        clearPathVisualization()
+        return
     end
 
     currentWaypointIndex = 1
+
+    currentPathBlockedConnection = path.Blocked:Connect(function(blockedWaypointIndex)
+        if isPaused then
+            return
+        end
+
+        if currentTargetPosition and blockedWaypointIndex >= currentWaypointIndex then
+            task.defer(function()
+                if currentTargetPosition then
+                    computePath(currentTargetPosition :: Vector3)
+                end
+            end)
+        end
+    end)
+
     refreshPathVisualization(true)
 end
 
@@ -516,6 +601,7 @@ local function followPathWithoutHumanoid(stepDistance: number)
             if currentWaypointIndex > #waypoints then
                 currentWaypointIndex = 0
                 currentTargetPosition = nil
+                releaseActivePath()
                 setActivity("Idle")
                 clearPathVisualization()
                 return
@@ -549,6 +635,7 @@ local function updateWaypointProgressForHumanoid()
         if currentWaypointIndex > #waypoints then
             currentWaypointIndex = 0
             currentTargetPosition = nil
+            releaseActivePath()
             setActivity("Idle")
             clearPathVisualization()
         end
@@ -592,20 +679,6 @@ local function moveTowardsPlayer(player: Player, dt: number)
 
     refreshPathVisualization(false)
 end
-
-path.Blocked:Connect(function(blockedWaypointIndex)
-    if isPaused then
-        return
-    end
-
-    if currentTargetPosition and blockedWaypointIndex >= currentWaypointIndex then
-        task.defer(function()
-            if currentTargetPosition then
-                computePath(currentTargetPosition :: Vector3)
-            end
-        end)
-    end
-end)
 
 if humanoid then
     humanoid.MoveToFinished:Connect(function(_reached)
