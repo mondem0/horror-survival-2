@@ -248,37 +248,65 @@ local function getNearestPlayer()
     return nearestPlayer
 end
 
-local function computePath(targetPosition)
+local function computePath(targetPosition, suppressWarning)
     local path = PathfindingService:CreatePath(CONFIG.PathAgent)
     local success, errorMessage = pcall(function()
         path:ComputeAsync(root.Position, targetPosition)
     end)
 
     if not success or path.Status ~= Enum.PathStatus.Success then
-        warn("Enemy path computation failed", errorMessage)
+        if not suppressWarning then
+            warn("Enemy path computation failed", errorMessage)
+        end
         return nil
     end
 
     return path
 end
 
-local function computeGoalPosition(targetRoot)
+local horizontalDirections = {
+    Vector3.new(1, 0, 0),
+    Vector3.new(-1, 0, 0),
+    Vector3.new(0, 0, 1),
+    Vector3.new(0, 0, -1),
+    Vector3.new(1, 0, 1).Unit,
+    Vector3.new(-1, 0, 1).Unit,
+    Vector3.new(1, 0, -1).Unit,
+    Vector3.new(-1, 0, -1).Unit,
+}
+
+local function buildGoalCandidates(targetRoot)
+    local candidates = {}
     local desiredDistance = CONFIG.PreferredDistance or 0
     local targetPosition = targetRoot.Position
 
+    if desiredDistance > 0 then
+        local offset = targetPosition - root.Position
+        local horizontal = Vector3.new(offset.X, 0, offset.Z)
+
+        if horizontal.Magnitude > 0 then
+            local direction = (-horizontal).Unit
+            table.insert(candidates, targetPosition + direction * desiredDistance)
+        end
+
+        for _, direction in ipairs(horizontalDirections) do
+            table.insert(candidates, targetPosition + direction * desiredDistance)
+        end
+    end
+
+    table.insert(candidates, targetPosition)
+    return candidates
+end
+
+local function withinPreferredRange(targetRoot)
+    local desiredDistance = CONFIG.PreferredDistance or 0
     if desiredDistance <= 0 then
-        return targetPosition
+        return false
     end
 
-    local offset = root.Position - targetPosition
-    local distance = offset.Magnitude
-
-    if distance == 0 then
-        return targetPosition + Vector3.new(desiredDistance, 0, 0)
-    end
-
-    local direction = offset.Unit
-    return targetPosition + direction * desiredDistance
+    local tolerance = CONFIG.GoalTolerance or 0
+    local distance = (targetRoot.Position - root.Position).Magnitude
+    return distance <= desiredDistance + tolerance
 end
 
 local pathVersion = 0
@@ -320,6 +348,11 @@ local function followWaypoints(waypoints, targetRoot)
                 return
             end
 
+            if withinPreferredRange(currentTargetRoot) then
+                stopCurrentPath(thisVersion)
+                return
+            end
+
             if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
                 humanoid.Jump = true
             end
@@ -332,6 +365,11 @@ local function followWaypoints(waypoints, targetRoot)
             end
 
             if not reached then
+                stopCurrentPath(thisVersion)
+                return
+            end
+
+            if withinPreferredRange(currentTargetRoot) then
                 stopCurrentPath(thisVersion)
                 return
             end
@@ -360,19 +398,26 @@ while true do
         continue
     end
 
-    local goalPosition = computeGoalPosition(targetRoot)
-    local distanceToGoal = (goalPosition - root.Position).Magnitude
-    local tolerance = CONFIG.GoalTolerance or 0
-
-    if tolerance > 0 and distanceToGoal <= tolerance then
+    if withinPreferredRange(targetRoot) then
         stopCurrentPath(pathVersion)
         task.wait(CONFIG.RepathInterval)
         continue
     end
 
-    local path = computePath(goalPosition)
-    if path then
-        local waypoints = path:GetWaypoints()
+    local candidates = buildGoalCandidates(targetRoot)
+    local selectedPath
+
+    for index, goalPosition in ipairs(candidates) do
+        local suppress = index < #candidates
+        local path = computePath(goalPosition, suppress)
+        if path then
+            selectedPath = path
+            break
+        end
+    end
+
+    if selectedPath then
+        local waypoints = selectedPath:GetWaypoints()
         if #waypoints > 0 then
             followWaypoints(waypoints, targetRoot)
         else
