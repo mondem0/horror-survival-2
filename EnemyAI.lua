@@ -335,10 +335,26 @@ local function setupAnimations()
                 local animation = Instance.new("Animation")
                 animation.AnimationId = resolvedId
                 animation.Name = string.format("Enemy_%sAnimation", state)
-                animation.Priority = configuredPriorities[state] or defaultPriorities[state] or Enum.AnimationPriority.Movement
+                local priority = configuredPriorities[state] or defaultPriorities[state] or Enum.AnimationPriority.Movement
+
+                -- Priority is not available on all runtime environments (e.g. some
+                -- experiences running the older Animation object implementation).
+                -- Wrap the assignment so it fails gracefully instead of throwing
+                -- and preventing the script from finishing setup.
+                pcall(function()
+                    animation.Priority = priority
+                end)
+
                 animation.Parent = script
 
                 local track = anim:LoadAnimation(animation)
+                -- Fall back to setting the priority on the track if the Animation
+                -- instance rejected the property assignment above.
+                if track.Priority ~= priority then
+                    pcall(function()
+                        track.Priority = priority
+                    end)
+                end
                 track.Looped = true
                 animationTracks[state] = track
             end
