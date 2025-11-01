@@ -22,6 +22,8 @@ end
 local CONFIG = {
     RepathInterval = 1.0, -- Seconds between path recomputations.
     AllowJump = false, -- Set true if the enemy should obey jump waypoints.
+    PreferredDistance = 5, -- Desired separation from the target player (studs).
+    GoalTolerance = 1.5, -- Considered "close enough" to the preferred distance (studs).
     Animations = {
         TransitionTime = 0.2,
         Idle = nil, -- Accepts animation ids (string/number) or Animation instances.
@@ -260,6 +262,25 @@ local function computePath(targetPosition)
     return path
 end
 
+local function computeGoalPosition(targetRoot)
+    local desiredDistance = CONFIG.PreferredDistance or 0
+    local targetPosition = targetRoot.Position
+
+    if desiredDistance <= 0 then
+        return targetPosition
+    end
+
+    local offset = root.Position - targetPosition
+    local distance = offset.Magnitude
+
+    if distance == 0 then
+        return targetPosition + Vector3.new(desiredDistance, 0, 0)
+    end
+
+    local direction = offset.Unit
+    return targetPosition + direction * desiredDistance
+end
+
 local pathVersion = 0
 local currentTargetRoot
 local hasActivePath = false
@@ -339,7 +360,17 @@ while true do
         continue
     end
 
-    local path = computePath(targetRoot.Position)
+    local goalPosition = computeGoalPosition(targetRoot)
+    local distanceToGoal = (goalPosition - root.Position).Magnitude
+    local tolerance = CONFIG.GoalTolerance or 0
+
+    if tolerance > 0 and distanceToGoal <= tolerance then
+        stopCurrentPath(pathVersion)
+        task.wait(CONFIG.RepathInterval)
+        continue
+    end
+
+    local path = computePath(goalPosition)
     if path then
         local waypoints = path:GetWaypoints()
         if #waypoints > 0 then
