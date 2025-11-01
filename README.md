@@ -20,6 +20,7 @@ Open the `CONFIG` table near the top of the script to customize behaviour:
 - `Visualization.Enabled`: Turn the neon path rendering on or off.
 - `Visualization.SegmentThickness` and `Visualization.WaypointSize`: Adjust the look of the visual path.
 - `Visualization.Color`: Change the path colour.
+- `AllowJump`: Let the NPC obey pathfinding jump commands when true; disabled by default to keep enemies grounded.
 
 If the NPC gets stuck, try increasing the path agent radius/height values or giving the enemy more room to move.
 

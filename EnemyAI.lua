@@ -23,10 +23,11 @@ if not root then
 end
 
 local CONFIG = {
+    AllowJump = false,
     PathAgent = {
         AgentHeight = 6,
         AgentRadius = 2,
-        AgentCanJump = true,
+        AgentCanJump = false,
     },
     RecomputeDelay = 0.75,
     WaypointTolerance = 1.5,
@@ -37,6 +38,8 @@ local CONFIG = {
         Color = Color3.fromRGB(0, 255, 170),
     },
 }
+
+CONFIG.PathAgent.AgentCanJump = CONFIG.AllowJump
 
 local visualizationFolder = Instance.new("Folder")
 visualizationFolder.Name = "EnemyPathVisualization"
@@ -137,8 +140,11 @@ local function moveToWaypoint(index: number)
         return false
     end
 
-    if waypoint.Action == Enum.PathWaypointAction.Jump then
-        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+    if waypoint.Action == Enum.PathWaypointAction.Jump and CONFIG.AllowJump then
+        local floorMaterial = humanoid.FloorMaterial
+        if floorMaterial and floorMaterial ~= Enum.Material.Air then
+            humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        end
     end
 
     humanoid:MoveTo(waypoint.Position)
