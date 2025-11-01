@@ -34,6 +34,7 @@ local CONFIG = {
         AgentRadius = 2,
         AgentCanJump = false,
     },
+    WaypointSpacing = 0, -- Minimum distance between successive waypoints (0 keeps all).
     Visualization = {
         Enabled = true,
         SegmentThickness = 0.2,
@@ -228,6 +229,44 @@ local function renderPath(waypoints)
     end
 end
 
+local function applyWaypointSpacing(waypoints)
+    local spacing = CONFIG.WaypointSpacing or 0
+    if spacing <= 0 then
+        return waypoints
+    end
+
+    local filtered = {}
+    local lastPosition
+
+    for _, waypoint in ipairs(waypoints) do
+        local keep = false
+        if not lastPosition then
+            keep = true
+        else
+            local delta = waypoint.Position - lastPosition
+            if delta.Magnitude >= spacing or waypoint.Action == Enum.PathWaypointAction.Jump then
+                keep = true
+            end
+        end
+
+        if keep then
+            table.insert(filtered, waypoint)
+            lastPosition = waypoint.Position
+        end
+    end
+
+    if #filtered == 0 then
+        return waypoints
+    end
+
+    local lastOriginal = waypoints[#waypoints]
+    if filtered[#filtered] ~= lastOriginal then
+        table.insert(filtered, lastOriginal)
+    end
+
+    return filtered
+end
+
 local function getNearestPlayer()
     local nearestPlayer
     local nearestDistance = math.huge
@@ -417,7 +456,7 @@ while true do
     end
 
     if selectedPath then
-        local waypoints = selectedPath:GetWaypoints()
+        local waypoints = applyWaypointSpacing(selectedPath:GetWaypoints())
         if #waypoints > 0 then
             followWaypoints(waypoints, targetRoot)
         else
