@@ -278,27 +278,55 @@ local function trimCompletedWaypoints(waypoints)
         tolerance = math.min(dynamic, 12)
     end
 
-    local moveDirection = humanoid.MoveDirection
-    local hasMoveDirection = moveDirection.Magnitude > 0.1
-    if hasMoveDirection then
-        moveDirection = moveDirection.Unit
-    end
-
+    local position = root.Position
     local firstIndex = 1
-    for index, waypoint in ipairs(waypoints) do
-        local offset = waypoint.Position - root.Position
-        local distance = offset.Magnitude
-        local behind = false
 
-        if hasMoveDirection then
-            local projection = offset:Dot(moveDirection)
-            if projection < -tolerance then
-                behind = true
+    while firstIndex < #waypoints do
+        local current = waypoints[firstIndex]
+        local nextWaypoint = waypoints[firstIndex + 1]
+
+        if not nextWaypoint then
+            break
+        end
+
+        local toCurrent = position - current.Position
+        local distance = toCurrent.Magnitude
+        if distance <= tolerance then
+            firstIndex += 1
+            continue
+        end
+
+        local segment = nextWaypoint.Position - current.Position
+        local segmentLength = segment.Magnitude
+        if segmentLength < 1e-3 then
+            firstIndex += 1
+            continue
+        end
+
+        local segmentUnit = segment / segmentLength
+        local projection = toCurrent:Dot(segmentUnit)
+
+        if projection > segmentLength + tolerance then
+            firstIndex += 1
+            continue
+        end
+
+        if projection >= -tolerance then
+            local closestPoint = current.Position + segmentUnit * math.clamp(projection, 0, segmentLength)
+            local lateralDistance = (position - closestPoint).Magnitude
+            if lateralDistance <= tolerance then
+                firstIndex += 1
+                continue
             end
         end
 
-        if distance <= tolerance or behind then
-            firstIndex = index + 1
+        break
+    end
+
+    while firstIndex < #waypoints do
+        local current = waypoints[firstIndex]
+        if (position - current.Position).Magnitude <= tolerance then
+            firstIndex += 1
         else
             break
         end
